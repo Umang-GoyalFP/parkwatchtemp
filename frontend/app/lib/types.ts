@@ -1,0 +1,117 @@
+export type Confidence = "High" | "Medium" | "Low";
+
+export type Summary = {
+  hotspot_count: number;
+  edge_count: number;
+  station_count: number;
+  total_violations: number;
+  score_name: string;
+  score_note: string;
+  metadata: {
+    rows_read?: number;
+    timezone?: string;
+    generated_at?: string;
+  };
+};
+
+export type Hotspot = {
+  grid_cell_id: string;
+  latitude: number;
+  longitude: number;
+  violation_count: number;
+  active_days: number;
+  active_weeks: number;
+  active_months?: number;
+  device_days: number;
+  mean_severity: number;
+  junction_share: number;
+  approved_count: number;
+  validated_count: number;
+  dominant_station: string | null;
+  dominant_junction: string | null;
+  representative_location: string | null;
+  peak_hour: number | null;
+  peak_weekday: string | null;
+  peak_month: string | null;
+  dominant_violation_type: string | null;
+  neighbor_influence: number;
+  obstruction_risk_score: number;
+  risk_score_type: string;
+  confidence: Confidence;
+  reason_codes: string[];
+};
+
+export type StationSummary = {
+  station: string;
+  hotspot_count: number;
+  violation_count: number;
+  mean_obstruction_risk_score: number;
+};
+
+export type TemporalHour = {
+  hour: number;
+  violation_count: number;
+};
+
+export type TemporalWeekday = {
+  weekday: string;
+  violation_count: number;
+};
+
+export type HeatmapPoint = {
+  weekday: string;
+  hour: number;
+  violation_count: number;
+};
+
+export type TimeseriesPoint = {
+  date: string;
+  violation_count: number;
+};
+
+export type GraphEdge = {
+  source: string;
+  target: string;
+  distance_meters: number;
+  weight: number;
+};
+
+export type GraphResponse = {
+  cell_id: string;
+  node: Hotspot;
+  neighbors: Hotspot[];
+  edges: GraphEdge[];
+};
+
+export type ForecastItem = {
+  grid_cell_id: string;
+  station: string | null;
+  junction: string | null;
+  location: string | null;
+  latitude: number;
+  longitude: number;
+  predicted_week: string | null;
+  predicted_violation_count: number;
+  predicted_obstruction_risk: number;
+  confidence: Confidence;
+  neighbor_influence: number;
+  last_1_week_count: number;
+  last_2_week_avg: number;
+  last_4_week_avg: number;
+  historical_weeks: { week: string; violation_count: number }[];
+  reason_codes: string[];
+};
+
+export type ForecastResponse = {
+  forecast_type: string;
+  not_measured_congestion: boolean;
+  method: string;
+  forecast_week: string | null;
+  holdout: {
+    weeks: string[];
+    mae: number | null;
+    mape: number | null;
+    evaluated_points: number;
+  };
+  items: ForecastItem[];
+};

@@ -16,6 +16,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend/app/lib/
+!frontend/app/lib/**
 parts/
 sdist/
 var/
@@ -218,6 +220,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # ParkWatch: official dataset, reference docs, and generated analysis artifacts
+.env
 data/
 docs/*.xlsx
 *.csv
@@ -234,6 +237,7 @@ frontend/public/generated/
 # Node / Next.js frontend
 node_modules/
 .next/
+*.tsbuildinfo
 out/
 .next-debug.log*
 npm-debug.log*

@@ -1,0 +1,35 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import "./styles.css";
+
+export const metadata: Metadata = {
+  title: "ParkWatch",
+  description: "Civic-tech dashboard for parking obstruction risk hotspots"
+};
+
+export default function RootLayout({
+  children
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en">
+      <body>
+        <header className="app-header">
+          <Link className="brand" href="/">
+            <span className="brand-mark">PW</span>
+            <span>
+              <strong>ParkWatch</strong>
+              <small>Obstruction Risk Score</small>
+            </span>
+          </Link>
+          <nav aria-label="Primary navigation">
+            <Link href="/">Dashboard</Link>
+            <Link href="/methodology">Methodology</Link>
+          </nav>
+        </header>
+        {children}
+      </body>
+    </html>
+  );
+}
