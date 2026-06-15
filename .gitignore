@@ -216,3 +216,39 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ParkWatch: official dataset, reference docs, and generated analysis artifacts
+data/
+docs/*.xlsx
+*.csv
+*.xlsx
+*.parquet
+*.jsonl
+outputs/
+generated/
+artifacts/
+backend/data/processed/
+backend/app/data/processed/
+frontend/public/generated/
+
+# Node / Next.js frontend
+node_modules/
+.next/
+out/
+.next-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Frontend env files
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
