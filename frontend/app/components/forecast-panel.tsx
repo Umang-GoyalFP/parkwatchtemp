@@ -1,4 +1,8 @@
+"use client";
+
+import Link from "next/link";
 import type { ForecastItem, ForecastResponse } from "../lib/types";
+import { forecastHotspotContext, forecastHotspotName } from "../lib/hotspot-labels";
 
 type ForecastPanelProps = {
   forecast: ForecastResponse;
@@ -6,6 +10,43 @@ type ForecastPanelProps = {
 
 export function ForecastPanel({ forecast }: ForecastPanelProps) {
   const topItem = forecast.items[0] ?? null;
+  const exportForecastCsv = () => {
+    const header = [
+      "rank",
+      "location",
+      "station",
+      "cell_id",
+      "predicted_violation_count",
+      "prediction_interval_low",
+      "prediction_interval_high",
+      "predicted_enforcement_priority",
+      "forecast_stability",
+      "confidence",
+      "forecast_reason_codes"
+    ];
+    const rows = forecast.items.map((item, index) => [
+      index + 1,
+      item.location ?? item.junction ?? item.grid_cell_id,
+      item.station ?? "",
+      item.grid_cell_id,
+      item.predicted_violation_count.toFixed(1),
+      item.prediction_interval_low.toFixed(1),
+      item.prediction_interval_high.toFixed(1),
+      item.predicted_enforcement_priority.toFixed(1),
+      item.forecast_stability.toFixed(1),
+      item.confidence,
+      item.forecast_reason_codes.join("; ")
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(","))
+      .join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "parkwatch-forecast-priority-zones.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <section className="forecast-layout">
@@ -15,21 +56,24 @@ export function ForecastPanel({ forecast }: ForecastPanelProps) {
             <p className="eyebrow">Graph-enhanced forecast</p>
             <h2>Next-week observed violation forecast</h2>
           </div>
-          <span className="pill">{forecast.forecast_week ?? "Next week"}</span>
+          <div className="table-actions">
+            <Link className="explain-link" href="/explainer">What does this mean?</Link>
+            <span className="pill">{forecast.forecast_week ?? "Next week"}</span>
+          </div>
         </div>
         <p>
           This is a forecast of future observed parking violations, not measured
-          congestion. The baseline uses recent weekly counts plus graph-neighbor
-          activity from nearby hotspot cells.
+          congestion. Forecast v2 uses recent weekly counts, trend, station-normalized
+          activity, graph-neighbor activity, temporal concentration, and stability.
         </p>
         <div className="forecast-metrics">
           <span>
             <strong>{forecast.holdout.mae?.toFixed(2) ?? "n/a"}</strong>
-            Holdout MAE
+            Rolling MAE
           </span>
           <span>
             <strong>{forecast.holdout.mape?.toFixed(1) ?? "n/a"}%</strong>
-            Holdout MAPE
+            Rolling MAPE
           </span>
           <span>
             <strong>{forecast.holdout.evaluated_points.toLocaleString("en-IN")}</strong>
@@ -42,7 +86,8 @@ export function ForecastPanel({ forecast }: ForecastPanelProps) {
         <div className="section-heading">
           <div>
             <p className="eyebrow">Historical vs predicted</p>
-            <h2>{topItem?.grid_cell_id ?? "No forecast"}</h2>
+            <h2>{topItem ? forecastHotspotName(topItem) : "No forecast"}</h2>
+            {topItem && <span className="cell-meta">{forecastHotspotContext(topItem)}</span>}
           </div>
         </div>
         {topItem && <ForecastChart item={topItem} />}
@@ -52,28 +97,52 @@ export function ForecastPanel({ forecast }: ForecastPanelProps) {
         <div className="section-heading">
           <div>
             <p className="eyebrow">Top predicted hotspots</p>
-            <h2>Predicted count and risk</h2>
+            <h2>Predicted range and priority</h2>
           </div>
-          <span className="pill">{forecast.items.length} shown</span>
+          <div className="table-actions">
+            <button className="export-button" type="button" onClick={exportForecastCsv}>
+              Export CSV
+            </button>
+            <span className="pill">{forecast.items.length} shown</span>
+          </div>
         </div>
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Cell</th>
+                <th>Location</th>
                 <th>Station</th>
-                <th>Predicted count</th>
-                <th>Predicted risk</th>
+                <th>Predicted range</th>
+                <th>Priority</th>
+                <th>Stability</th>
+                <th>Reasons</th>
                 <th>Confidence</th>
               </tr>
             </thead>
             <tbody>
               {forecast.items.slice(0, 25).map((item) => (
                 <tr key={item.grid_cell_id}>
-                  <td>{item.grid_cell_id}</td>
+                  <td>
+                    <strong className="location-name">{forecastHotspotName(item)}</strong>
+                    <span className="cell-meta">{forecastHotspotContext(item)}</span>
+                  </td>
                   <td>{item.station ?? "Unknown"}</td>
-                  <td>{item.predicted_violation_count.toFixed(1)}</td>
-                  <td>{item.predicted_obstruction_risk.toFixed(1)}</td>
+                  <td>
+                    {item.prediction_interval_low.toFixed(1)}-
+                    {item.prediction_interval_high.toFixed(1)}
+                    <span className="cell-meta">
+                      center {item.predicted_violation_count.toFixed(1)}
+                    </span>
+                  </td>
+                  <td>{item.predicted_enforcement_priority.toFixed(1)}</td>
+                  <td>{item.forecast_stability.toFixed(1)}</td>
+                  <td>
+                    <div className="reason-list compact">
+                      {item.forecast_reason_codes.slice(0, 3).map((reason) => (
+                        <span key={reason}>{reason.replaceAll("_", " ")}</span>
+                      ))}
+                    </div>
+                  </td>
                   <td>
                     <span className={`confidence ${item.confidence.toLowerCase()}`}>
                       {item.confidence}
@@ -113,6 +182,10 @@ function ForecastChart({ item }: { item: ForecastItem }) {
 
   return (
     <>
+      <div className="chart-legend" aria-label="Forecast chart legend">
+        <span><i className="legend-swatch line" />Historical weekly violations</span>
+        <span><i className="legend-swatch predicted" />Predicted week center</span>
+      </div>
       <svg className="forecast-chart" viewBox="0 0 420 180" role="img" aria-label="Historical versus predicted weekly violations">
         <path d={path} />
         {points.map((point, index) => {
@@ -133,18 +206,30 @@ function ForecastChart({ item }: { item: ForecastItem }) {
       </svg>
       <dl className="forecast-detail-list">
         <div>
-          <dt>Predicted count</dt>
-          <dd>{item.predicted_violation_count.toFixed(1)}</dd>
+          <dt>Predicted count range</dt>
+          <dd>
+            {item.prediction_interval_low.toFixed(1)}-
+            {item.prediction_interval_high.toFixed(1)}
+          </dd>
         </div>
         <div>
-          <dt>Predicted risk</dt>
-          <dd>{item.predicted_obstruction_risk.toFixed(1)}</dd>
+          <dt>Predicted priority</dt>
+          <dd>{item.predicted_enforcement_priority.toFixed(1)}</dd>
+        </div>
+        <div>
+          <dt>Forecast stability</dt>
+          <dd>{item.forecast_stability.toFixed(1)}</dd>
         </div>
         <div>
           <dt>Station</dt>
           <dd>{item.station ?? "Unknown"}</dd>
         </div>
       </dl>
+      <div className="reason-list">
+        {item.forecast_reason_codes.map((reason) => (
+          <span key={reason}>{reason.replaceAll("_", " ")}</span>
+        ))}
+      </div>
     </>
   );
 }

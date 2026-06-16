@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, type WheelEvent, type PointerEvent } from "react";
+import { hotspotName } from "../lib/hotspot-labels";
 import type { Hotspot } from "../lib/types";
 
 type HotspotMapProps = {
@@ -153,7 +154,7 @@ export function HotspotMap({ hotspots, selectedCellId, onSelect }: HotspotMapPro
                     strokeWidth={(selected ? 2 : 1) / scale}
                   >
                     <title>
-                      {`${hotspot.grid_cell_id}: ${hotspot.obstruction_risk_score} score, ${hotspot.violation_count} violations`}
+                      {`${hotspotName(hotspot)}: ${hotspot.obstruction_risk_score} score, ${hotspot.violation_count} violations`}
                     </title>
                   </circle>
                   <text

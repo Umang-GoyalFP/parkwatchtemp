@@ -49,10 +49,11 @@ export default function MethodologyPage() {
             ParkWatch has three parts: an offline preprocessing pipeline, a FastAPI
             backend, and a Next.js frontend. The preprocessing script reads the official
             CSV once, converts timestamps to Asia/Kolkata, parses violation types,
-            aggregates hotspot metrics, builds a grid-cell graph, computes scores and
-            forecasts, and writes JSON files. The backend serves only those precomputed
-            JSON outputs. The frontend renders dashboard, temporal, graph, forecast, and
-            methodology views from backend endpoints.
+            aggregates hotspot metrics, builds a grid-cell graph, computes obstruction
+            risk, computes enforcement priority, forecasts future observed violations,
+            and writes JSON files. The backend serves only those precomputed JSON
+            outputs. The frontend renders dashboard, explainer, temporal, graph,
+            forecast, and methodology views from backend endpoints.
           </p>
         </article>
 
@@ -117,13 +118,34 @@ export default function MethodologyPage() {
           </p>
         </article>
 
-        <article>
-          <h2>Forecast Method</h2>
+        <article className="method-section wide">
+          <h2>Enforcement Priority Score Formula</h2>
           <p>
-            The forecast is a simple next-week prediction of future observed parking
-            violations. It uses last 1-week count, last 2-week average, last 4-week
-            average, and a small weighted graph-neighbor term. It is evaluated with the
-            last four weekly buckets as a holdout.
+            The action score is scaled from 0 to 100 and combines the risk proxy with
+            operational signals available in the official CSV:
+          </p>
+          <pre className="formula-block">{`0.28 * Obstruction Risk Score
++ 0.18 * station-normalized violation volume
++ 0.14 * recent 4-week activity
++ 0.12 * peak-hour temporal concentration
++ 0.10 * recent trend ratio
++ 0.08 * graph-neighbor influence
++ 0.06 * confidence evidence level
++ 0.04 * stability across weeks, days, and devices`}</pre>
+          <p>
+            This score ranks where enforcement should be considered first. It does not
+            measure traffic speed, delay, or congestion reduction.
+          </p>
+        </article>
+
+        <article>
+          <h2>Forecast V2 Method</h2>
+          <p>
+            The forecast predicts next-week future observed parking violations. It uses
+            last 1-week count, last 2-week average, last 4-week average, recent trend,
+            station-normalized activity, graph-neighbor activity, temporal
+            concentration, and stability. Rolling-origin weekly backtesting evaluates
+            forecast error on observed violation counts.
           </p>
         </article>
 

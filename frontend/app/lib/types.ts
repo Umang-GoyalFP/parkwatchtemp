@@ -36,7 +36,15 @@ export type Hotspot = {
   dominant_violation_type: string | null;
   neighbor_influence: number;
   obstruction_risk_score: number;
+  enforcement_priority_score: number;
+  station_normalized_volume: number;
+  temporal_concentration: number;
+  recent_activity_score: number;
+  recent_trend_ratio: number;
+  stability_score: number;
+  priority_band: "Deploy first" | "Schedule patrol" | "Monitor";
   risk_score_type: string;
+  model_version?: string;
   confidence: Confidence;
   reason_codes: string[];
 };
@@ -92,13 +100,18 @@ export type ForecastItem = {
   longitude: number;
   predicted_week: string | null;
   predicted_violation_count: number;
+  prediction_interval_low: number;
+  prediction_interval_high: number;
   predicted_obstruction_risk: number;
+  predicted_enforcement_priority: number;
+  forecast_stability: number;
   confidence: Confidence;
   neighbor_influence: number;
   last_1_week_count: number;
   last_2_week_avg: number;
   last_4_week_avg: number;
   historical_weeks: { week: string; violation_count: number }[];
+  forecast_reason_codes: string[];
   reason_codes: string[];
 };
 
@@ -112,6 +125,7 @@ export type ForecastResponse = {
     mae: number | null;
     mape: number | null;
     evaluated_points: number;
+    validation_type?: string;
   };
   items: ForecastItem[];
 };

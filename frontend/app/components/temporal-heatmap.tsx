@@ -34,6 +34,13 @@ export function TemporalHeatmap({ hourly, weekday, heatmap }: TemporalHeatmapPro
           />
         ))}
       </div>
+      <div className="axis-legend" aria-hidden="true">
+        <span>00:00</span>
+        <span>06:00</span>
+        <span>12:00</span>
+        <span>18:00</span>
+        <span>23:00</span>
+      </div>
 
       <div className="heatmap-grid" aria-label="Weekday by hour heatmap">
         {WEEKDAYS.map((day) => (
@@ -53,6 +60,11 @@ export function TemporalHeatmap({ hourly, weekday, heatmap }: TemporalHeatmapPro
             <strong>{(weekdayTotals.get(day) ?? 0).toLocaleString("en-IN")}</strong>
           </div>
         ))}
+      </div>
+      <div className="heatmap-legend" aria-label="Heatmap legend">
+        <span>Lower violations</span>
+        <i />
+        <span>Higher violations</span>
       </div>
     </section>
   );

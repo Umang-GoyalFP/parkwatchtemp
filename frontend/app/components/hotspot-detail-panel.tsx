@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { hotspotContext, hotspotName } from "../lib/hotspot-labels";
 import type { GraphResponse, Hotspot, TimeseriesPoint } from "../lib/types";
 
 type DetailState =
@@ -11,14 +12,21 @@ type DetailState =
 
 type HotspotDetailPanelProps = {
   hotspot: Hotspot | null;
+  scoreBenchmarks: {
+    maxViolationCount: number;
+    maxActiveDays: number;
+    maxDeviceDays: number;
+    maxNeighborInfluence: number;
+  };
 };
 
-export function HotspotDetailPanel({ hotspot }: HotspotDetailPanelProps) {
+export function HotspotDetailPanel({ hotspot, scoreBenchmarks }: HotspotDetailPanelProps) {
   const [detail, setDetail] = useState<DetailState>({
     status: "idle",
     timeseries: [],
     graph: null
   });
+  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
 
   useEffect(() => {
     if (!hotspot) {
@@ -65,28 +73,73 @@ export function HotspotDetailPanel({ hotspot }: HotspotDetailPanelProps) {
 
   const maxSeries = Math.max(...detail.timeseries.map((item) => item.violation_count), 1);
   const trendPath = buildTrendPath(detail.timeseries.slice(-60));
+  const scoreBreakdown = buildScoreBreakdown(hotspot, scoreBenchmarks);
 
   return (
     <aside className="panel detail-panel">
       <div className="section-heading">
         <div>
           <p className="eyebrow">Hotspot detail</p>
-          <h2>{hotspot.grid_cell_id}</h2>
+          <h2>{hotspotName(hotspot)}</h2>
+          <span className="cell-meta">{hotspotContext(hotspot)}</span>
         </div>
         <span className={`confidence ${hotspot.confidence.toLowerCase()}`}>
           {hotspot.confidence}
         </span>
       </div>
 
-      <div className="score-ring" aria-label="Obstruction Risk Score">
+      <button
+        className="score-ring"
+        type="button"
+        aria-expanded={showScoreBreakdown}
+        aria-label="Show Obstruction Risk Score calculation"
+        onClick={() => setShowScoreBreakdown((current) => !current)}
+      >
         <strong>{hotspot.obstruction_risk_score.toFixed(1)}</strong>
         <span>Obstruction Risk Score</span>
-      </div>
+      </button>
+
+      {showScoreBreakdown && (
+        <section className="score-breakdown" aria-label="Obstruction Risk Score calculation">
+          <div className="score-breakdown-head">
+            <strong>Score calculation</strong>
+            <span>{scoreBreakdown.total.toFixed(1)} computed from CSV-only features</span>
+          </div>
+          {scoreBreakdown.components.map((component) => (
+            <div className="score-component" key={component.label}>
+              <span>{component.label}</span>
+              <meter min="0" max={component.maxContribution} value={component.contribution} />
+              <strong>{component.contribution.toFixed(1)}</strong>
+            </div>
+          ))}
+          <p>
+            Components are normalized against the loaded hotspot set. The result is an
+            obstruction-risk proxy, not measured traffic delay.
+          </p>
+          <div className="score-breakdown-head">
+            <strong>Enforcement priority model</strong>
+            <span>{hotspot.enforcement_priority_score.toFixed(1)} action score · {hotspot.priority_band}</span>
+          </div>
+          <div className="priority-factors">
+            <span>Station volume {(hotspot.station_normalized_volume * 100).toFixed(0)}%</span>
+            <span>Recent activity {(hotspot.recent_activity_score * 100).toFixed(0)}%</span>
+            <span>Peak concentration {(hotspot.temporal_concentration * 100).toFixed(0)}%</span>
+            <span>Trend {hotspot.recent_trend_ratio.toFixed(2)}x</span>
+            <span>Stability {hotspot.stability_score.toFixed(1)}</span>
+          </div>
+        </section>
+      )}
 
       <dl className="detail-list">
         <div>
           <dt>Confidence</dt>
           <dd>{hotspot.confidence}</dd>
+        </div>
+        <div>
+          <dt>Enforcement priority</dt>
+          <dd>
+            {hotspot.enforcement_priority_score.toFixed(1)} · {hotspot.priority_band}
+          </dd>
         </div>
         <div>
           <dt>Station</dt>
@@ -138,6 +191,10 @@ export function HotspotDetailPanel({ hotspot }: HotspotDetailPanelProps) {
 
       <section className="mini-section">
         <h3>Trend chart</h3>
+        <div className="chart-legend" aria-label="Trend chart legend">
+          <span><i className="legend-swatch line" />Daily violations</span>
+          <span><i className="legend-swatch area" />Recent 60-day range</span>
+        </div>
         {detail.status === "loading" && <p className="muted">Loading detail...</p>}
         {detail.status === "error" && <p className="muted">Detail data unavailable.</p>}
         <svg className="trend-chart" viewBox="0 0 320 120" role="img" aria-label="Daily violation trend chart">
@@ -182,6 +239,61 @@ function buildTrendPath(points: TimeseriesPoint[]) {
     .join(" ");
 }
 
+function buildScoreBreakdown(
+  hotspot: Hotspot,
+  benchmarks: HotspotDetailPanelProps["scoreBenchmarks"]
+) {
+  const validationShare =
+    hotspot.violation_count > 0 ? hotspot.validated_count / hotspot.violation_count : 0;
+  const components = [
+    {
+      label: "Violation volume",
+      maxContribution: 30,
+      contribution: 30 * scale(hotspot.violation_count, benchmarks.maxViolationCount)
+    },
+    {
+      label: "Active-day recurrence",
+      maxContribution: 15,
+      contribution: 15 * scale(hotspot.active_days, benchmarks.maxActiveDays)
+    },
+    {
+      label: "Device-day support",
+      maxContribution: 10,
+      contribution: 10 * scale(hotspot.device_days, benchmarks.maxDeviceDays)
+    },
+    {
+      label: "Mean severity",
+      maxContribution: 20,
+      contribution: 20 * Math.min(Math.max((hotspot.mean_severity - 1) / 2, 0), 1)
+    },
+    {
+      label: "Junction share",
+      maxContribution: 10,
+      contribution: 10 * Math.min(Math.max(hotspot.junction_share, 0), 1)
+    },
+    {
+      label: "Neighbor influence",
+      maxContribution: 10,
+      contribution: 10 * scale(hotspot.neighbor_influence, benchmarks.maxNeighborInfluence)
+    },
+    {
+      label: "Validation share",
+      maxContribution: 5,
+      contribution: 5 * Math.min(Math.max(validationShare, 0), 1)
+    }
+  ];
+
+  return {
+    total: components.reduce((sum, component) => sum + component.contribution, 0),
+    components
+  };
+}
+
+function scale(value: number, maximum: number) {
+  if (maximum <= 0) return 0;
+  return Math.min(value / maximum, 1);
+}
+
 function NeighborhoodGraph({
   graph,
   selectedCellId
@@ -223,14 +335,14 @@ function NeighborhoodGraph({
             fill={neighbor.obstruction_risk_score >= 55 ? "#d88a17" : "#12a5a3"}
           >
             <title>
-              {`${neighbor.grid_cell_id}: ${neighbor.obstruction_risk_score} score`}
+              {`${hotspotName(neighbor)}: ${neighbor.obstruction_risk_score} score`}
             </title>
           </circle>
         );
       })}
       <circle className="network-center" cx={center.x} cy={center.y} r="18" />
       <text x={center.x} y={center.y + 4} textAnchor="middle">
-        Cell
+        Zone
       </text>
     </svg>
   );
