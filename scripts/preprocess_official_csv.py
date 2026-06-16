@@ -343,6 +343,9 @@ def reason_codes(
     risk_score: float,
     max_count: int,
     max_neighbor_influence: float,
+    temporal_concentration: float,
+    recent_trend_ratio: float,
+    station_volume_component: float,
 ) -> list[str]:
     codes: list[str] = []
     peak_count = max(cell.hour_counts.values(), default=0)
@@ -360,21 +363,63 @@ def reason_codes(
         codes.append("VALIDATED_REPORTS")
     if scale(cell.neighbor_influence, max_neighbor_influence) >= 0.6:
         codes.append("NEIGHBOR_HOTSPOT_INFLUENCE")
+    if temporal_concentration >= 0.22:
+        codes.append("CLEAR_ENFORCEMENT_WINDOW")
+    if recent_trend_ratio >= 1.25:
+        codes.append("RECENT_ACTIVITY_INCREASE")
+    if station_volume_component >= 0.7:
+        codes.append("HIGH_WITHIN_STATION_PRIORITY")
     if risk_score >= 75 and not codes:
         codes.append("ELEVATED_OBSTRUCTION_RISK_PROXY")
     return codes or ["LIMITED_EVIDENCE"]
 
 
+def average_for_weeks(counter: Counter[str], weeks: list[str]) -> float:
+    if not weeks:
+        return 0.0
+    return sum(counter.get(week, 0) for week in weeks) / len(weeks)
+
+
+def recent_trend_ratio(counter: Counter[str], all_weeks: list[str]) -> float:
+    if len(all_weeks) < 6:
+        return 1.0
+    recent = average_for_weeks(counter, all_weeks[-4:])
+    previous = average_for_weeks(counter, all_weeks[-8:-4])
+    if previous <= 0:
+        return 1.5 if recent > 0 else 1.0
+    return min(recent / previous, 2.0)
+
+
+def priority_band(score: float, confidence: str) -> str:
+    if score >= 60 and confidence != "Low":
+        return "Deploy first"
+    if score >= 40:
+        return "Schedule patrol"
+    return "Monitor"
+
+
 def serialize_hotspots(cells: dict[str, CellAggregate]) -> list[dict[str, Any]]:
     max_count = max((cell.violation_count for cell in cells.values()), default=0)
     max_active_days = max((len(cell.active_days) for cell in cells.values()), default=0)
+    max_active_weeks = max((len(cell.active_weeks) for cell in cells.values()), default=0)
     max_device_days = max((len(cell.device_days) for cell in cells.values()), default=0)
     max_neighbor_influence = max(
         (cell.neighbor_influence for cell in cells.values()), default=0.0
     )
+    all_weeks = sorted({week for cell in cells.values() for week in cell.week_counts})
+    station_max_counts: dict[str, int] = defaultdict(int)
+    max_recent_activity = 0.0
+    for cell in cells.values():
+        station = dominant(cell.station_counts, "Unknown")
+        station_max_counts[station] = max(station_max_counts[station], cell.violation_count)
+        max_recent_activity = max(
+            max_recent_activity,
+            average_for_weeks(cell.week_counts, all_weeks[-4:]),
+        )
 
     hotspots: list[dict[str, Any]] = []
     for cell in cells.values():
+        dominant_station = dominant(cell.station_counts)
         count_component = scale(cell.violation_count, max_count)
         day_component = scale(len(cell.active_days), max_active_days)
         device_component = scale(len(cell.device_days), max_device_days)
@@ -382,6 +427,26 @@ def serialize_hotspots(cells: dict[str, CellAggregate]) -> list[dict[str, Any]]:
         junction_component = cell.junction_count / cell.violation_count
         validation_component = cell.validated_count / cell.violation_count
         neighbor_component = scale(cell.neighbor_influence, max_neighbor_influence)
+        station_volume_component = scale(
+            cell.violation_count,
+            station_max_counts.get(dominant_station or "Unknown", max_count),
+        )
+        temporal_concentration = max(cell.hour_counts.values(), default=0) / cell.violation_count
+        recent_activity_component = scale(
+            average_for_weeks(cell.week_counts, all_weeks[-4:]),
+            max_recent_activity,
+        )
+        trend_ratio = recent_trend_ratio(cell.week_counts, all_weeks)
+        trend_component = min(max((trend_ratio - 0.75) / 1.25, 0.0), 1.0)
+        stability_score = round(
+            100.0
+            * (
+                0.55 * scale(len(cell.active_weeks), max_active_weeks)
+                + 0.30 * scale(len(cell.active_days), max_active_days)
+                + 0.15 * scale(len(cell.device_days), max_device_days)
+            ),
+            2,
+        )
         risk_score = round(
             100.0
             * (
@@ -392,6 +457,24 @@ def serialize_hotspots(cells: dict[str, CellAggregate]) -> list[dict[str, Any]]:
                 + 0.10 * junction_component
                 + 0.10 * neighbor_component
                 + 0.05 * validation_component
+            ),
+            2,
+        )
+        confidence = confidence_label(
+            cell.violation_count, len(cell.active_days), len(cell.device_days)
+        )
+        confidence_component = {"High": 1.0, "Medium": 0.65, "Low": 0.3}[confidence]
+        enforcement_priority_score = round(
+            100.0
+            * (
+                0.28 * (risk_score / 100.0)
+                + 0.18 * station_volume_component
+                + 0.14 * recent_activity_component
+                + 0.12 * temporal_concentration
+                + 0.10 * trend_component
+                + 0.08 * neighbor_component
+                + 0.06 * confidence_component
+                + 0.04 * (stability_score / 100.0)
             ),
             2,
         )
@@ -415,7 +498,7 @@ def serialize_hotspots(cells: dict[str, CellAggregate]) -> list[dict[str, Any]]:
                 "junction_share": round(cell.junction_count / cell.violation_count, 4),
                 "approved_count": cell.approved_count,
                 "validated_count": cell.validated_count,
-                "dominant_station": dominant(cell.station_counts),
+                "dominant_station": dominant_station,
                 "dominant_junction": dominant(cell.junction_counts),
                 "representative_location": dominant(cell.location_counts),
                 "peak_hour": dominant(cell.hour_counts),
@@ -424,18 +507,31 @@ def serialize_hotspots(cells: dict[str, CellAggregate]) -> list[dict[str, Any]]:
                 "dominant_violation_type": dominant(cell.violation_type_counts),
                 "neighbor_influence": round(cell.neighbor_influence, 4),
                 "obstruction_risk_score": risk_score,
+                "enforcement_priority_score": enforcement_priority_score,
+                "station_normalized_volume": round(station_volume_component, 4),
+                "temporal_concentration": round(temporal_concentration, 4),
+                "recent_activity_score": round(recent_activity_component, 4),
+                "recent_trend_ratio": round(trend_ratio, 4),
+                "stability_score": stability_score,
+                "priority_band": priority_band(enforcement_priority_score, confidence),
                 "risk_score_type": "congestion-risk proxy",
-                "confidence": confidence_label(
-                    cell.violation_count, len(cell.active_days), len(cell.device_days)
-                ),
+                "model_version": "official_csv_priority_v2",
+                "confidence": confidence,
                 "reason_codes": reason_codes(
-                    cell, risk_score, max_count, max_neighbor_influence
+                    cell,
+                    risk_score,
+                    max_count,
+                    max_neighbor_influence,
+                    temporal_concentration,
+                    trend_ratio,
+                    station_volume_component,
                 ),
             }
         )
 
     hotspots.sort(
         key=lambda item: (
+            item["enforcement_priority_score"],
             item["obstruction_risk_score"],
             item["violation_count"],
             item["grid_cell_id"],
@@ -522,11 +618,21 @@ def predict_week_count(
     weeks: list[str],
     counts_by_cell: dict[str, Counter[str]],
     edge_lookup: dict[str, list[tuple[str, float]]],
+    station_by_cell: dict[str, str] | None = None,
+    station_counts_by_week: dict[str, Counter[str]] | None = None,
+    hotspot_lookup: dict[str, dict[str, Any]] | None = None,
 ) -> float:
     counts = counts_by_cell[cell_id]
     last1 = counts.get(weeks[-1], 0) if len(weeks) >= 1 else 0
     last2 = sum(counts.get(week, 0) for week in weeks[-2:]) / min(len(weeks), 2)
     last4 = sum(counts.get(week, 0) for week in weeks[-4:]) / min(len(weeks), 4)
+    previous4 = (
+        sum(counts.get(week, 0) for week in weeks[-8:-4]) / 4
+        if len(weeks) >= 8
+        else last4
+    )
+    trend = 1.5 if previous4 <= 0 and last4 > 0 else (last4 / previous4 if previous4 else 1.0)
+    trend = min(max(trend, 0.35), 2.0)
 
     weighted_neighbor_sum = 0.0
     weight_sum = 0.0
@@ -539,9 +645,34 @@ def predict_week_count(
         weight_sum += weight
     neighbor_component = weighted_neighbor_sum / weight_sum if weight_sum else 0.0
 
-    prediction = (0.45 * last1) + (0.30 * last2) + (0.20 * last4) + (
-        0.05 * neighbor_component
+    station_component = 0.0
+    if station_by_cell and station_counts_by_week:
+        station = station_by_cell.get(cell_id)
+        if station:
+            station_counts = station_counts_by_week.get(station, Counter())
+            station_recent = sum(station_counts.get(week, 0) for week in weeks[-4:]) / min(
+                len(weeks), 4
+            )
+            station_component = station_recent / max(
+                sum(1 for item in station_by_cell.values() if item == station), 1
+            )
+
+    temporal_multiplier = 1.0
+    stability_multiplier = 1.0
+    if hotspot_lookup:
+        hotspot = hotspot_lookup.get(cell_id, {})
+        temporal_multiplier += min(float(hotspot.get("temporal_concentration", 0.0)), 0.35) * 0.18
+        stability_multiplier += (float(hotspot.get("stability_score", 0.0)) / 100.0 - 0.5) * 0.10
+
+    baseline = (
+        (0.34 * last1)
+        + (0.24 * last2)
+        + (0.22 * last4)
+        + (0.08 * neighbor_component)
+        + (0.08 * station_component)
+        + (0.04 * (last4 * trend))
     )
+    prediction = baseline * temporal_multiplier * stability_multiplier
     return max(0.0, prediction)
 
 
@@ -571,21 +702,40 @@ def serialize_forecast(
     counts_by_cell = {cell_id: cell.week_counts for cell_id, cell in cells.items()}
     edge_lookup = build_edge_lookup(edges)
     hotspot_lookup = {hotspot["grid_cell_id"]: hotspot for hotspot in hotspots}
+    station_by_cell = {
+        cell_id: hotspot_lookup[cell_id].get("dominant_station") or "Unknown"
+        for cell_id in counts_by_cell
+    }
+    station_counts_by_week: dict[str, Counter[str]] = defaultdict(Counter)
+    for cell_id, counts in counts_by_cell.items():
+        station_counts_by_week[station_by_cell[cell_id]].update(counts)
 
-    holdout_weeks = all_weeks[-4:] if len(all_weeks) >= 5 else []
+    holdout_weeks = all_weeks[-8:] if len(all_weeks) >= 12 else all_weeks[-4:]
     error_sum = 0.0
     absolute_percentage_error_sum = 0.0
     evaluated_points = 0
+    residuals_by_cell: dict[str, list[float]] = defaultdict(list)
+    global_residuals: list[float] = []
 
     for holdout_week in holdout_weeks:
         train_weeks = [week for week in all_weeks if week < holdout_week]
-        if not train_weeks:
+        if len(train_weeks) < 4:
             continue
         for cell_id in counts_by_cell:
             actual = counts_by_cell[cell_id].get(holdout_week, 0)
-            predicted = predict_week_count(cell_id, train_weeks, counts_by_cell, edge_lookup)
+            predicted = predict_week_count(
+                cell_id,
+                train_weeks,
+                counts_by_cell,
+                edge_lookup,
+                station_by_cell,
+                station_counts_by_week,
+                hotspot_lookup,
+            )
             absolute_error = abs(predicted - actual)
             error_sum += absolute_error
+            residuals_by_cell[cell_id].append(absolute_error)
+            global_residuals.append(absolute_error)
             if actual > 0:
                 absolute_percentage_error_sum += absolute_error / actual
             evaluated_points += 1
@@ -600,14 +750,50 @@ def serialize_forecast(
     forecast_week = next_iso_week_label(all_weeks[-1]) if all_weeks else None
     max_prediction = 0.0
     raw_forecasts: list[dict[str, Any]] = []
+    global_interval_error = percentile(global_residuals, 0.8) if global_residuals else 1.0
     for cell_id, cell in cells.items():
         hotspot = hotspot_lookup[cell_id]
-        predicted_count = predict_week_count(cell_id, all_weeks, counts_by_cell, edge_lookup)
+        predicted_count = predict_week_count(
+            cell_id,
+            all_weeks,
+            counts_by_cell,
+            edge_lookup,
+            station_by_cell,
+            station_counts_by_week,
+            hotspot_lookup,
+        )
         max_prediction = max(max_prediction, predicted_count)
+        cell_interval_error = (
+            percentile(residuals_by_cell[cell_id], 0.8)
+            if residuals_by_cell.get(cell_id)
+            else global_interval_error
+        )
+        interval_low = max(0.0, predicted_count - cell_interval_error)
+        interval_high = predicted_count + cell_interval_error
+        trend_ratio = recent_trend_ratio(cell.week_counts, all_weeks)
+        forecast_stability = round(
+            max(
+                0.0,
+                min(
+                    100.0,
+                    0.70 * float(hotspot.get("stability_score", 0.0))
+                    + 30.0 * (1.0 - min(cell_interval_error / max(predicted_count, 1.0), 1.0)),
+                ),
+            ),
+            2,
+        )
         history = [
             {"week": week, "violation_count": counts_by_cell[cell_id].get(week, 0)}
             for week in all_weeks[-12:]
         ]
+        forecast_reason_codes = forecast_reasons(
+            predicted_count,
+            trend_ratio,
+            float(hotspot.get("station_normalized_volume", 0.0)),
+            float(hotspot.get("neighbor_influence", 0.0)),
+            float(hotspot.get("temporal_concentration", 0.0)),
+            forecast_stability,
+        )
         raw_forecasts.append(
             {
                 "grid_cell_id": cell_id,
@@ -618,7 +804,11 @@ def serialize_forecast(
                 "longitude": hotspot["longitude"],
                 "predicted_week": forecast_week,
                 "predicted_violation_count": round(predicted_count, 2),
+                "prediction_interval_low": round(interval_low, 2),
+                "prediction_interval_high": round(interval_high, 2),
                 "predicted_obstruction_risk": 0.0,
+                "predicted_enforcement_priority": 0.0,
+                "forecast_stability": forecast_stability,
                 "confidence": forecast_confidence(len(cell.active_weeks), mae, predicted_count),
                 "neighbor_influence": hotspot["neighbor_influence"],
                 "last_1_week_count": counts_by_cell[cell_id].get(all_weeks[-1], 0),
@@ -633,11 +823,8 @@ def serialize_forecast(
                     2,
                 ),
                 "historical_weeks": history,
-                "reason_codes": [
-                    "RECENT_WEEKLY_BASELINE",
-                    "GRAPH_NEIGHBOR_INFLUENCE",
-                    "FORECAST_OF_OBSERVED_VIOLATIONS",
-                ],
+                "forecast_reason_codes": forecast_reason_codes,
+                "reason_codes": forecast_reason_codes,
             }
         )
 
@@ -645,11 +832,22 @@ def serialize_forecast(
         item["predicted_obstruction_risk"] = round(
             100.0 * scale(item["predicted_violation_count"], max_prediction), 2
         )
+        hotspot = hotspot_lookup[item["grid_cell_id"]]
+        item["predicted_enforcement_priority"] = round(
+            min(
+                100.0,
+                (0.46 * item["predicted_obstruction_risk"])
+                + (0.20 * float(hotspot.get("enforcement_priority_score", 0.0)))
+                + (0.18 * item["forecast_stability"])
+                + (16.0 * min(float(hotspot.get("station_normalized_volume", 0.0)), 1.0)),
+            ),
+            2,
+        )
 
     raw_forecasts.sort(
         key=lambda item: (
+            item["predicted_enforcement_priority"],
             item["predicted_violation_count"],
-            item["predicted_obstruction_risk"],
             item["grid_cell_id"],
         ),
         reverse=True,
@@ -658,16 +856,56 @@ def serialize_forecast(
     return {
         "forecast_type": "future observed parking violations",
         "not_measured_congestion": True,
-        "method": "Baseline next-week forecast from last 1/2/4 weekly counts plus weighted graph-neighbor recent activity.",
+        "method": (
+            "Forecast v2: official-CSV-only next-week observed violation forecast using "
+            "last 1/2/4 week counts, recent trend, station-normalized recent activity, "
+            "graph-neighbor recent activity, temporal concentration, and stability."
+        ),
         "forecast_week": forecast_week,
         "holdout": {
             "weeks": holdout_weeks,
             "mae": mae,
             "mape": mape,
             "evaluated_points": evaluated_points,
+            "validation_type": "rolling-origin weekly backtest",
         },
         "items": raw_forecasts,
     }
+
+
+def percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    index = min(
+        len(sorted_values) - 1,
+        max(0, math.ceil((len(sorted_values) - 1) * quantile)),
+    )
+    return sorted_values[index]
+
+
+def forecast_reasons(
+    predicted_count: float,
+    trend_ratio: float,
+    station_normalized_volume: float,
+    neighbor_influence: float,
+    temporal_concentration: float,
+    forecast_stability: float,
+) -> list[str]:
+    reasons = ["FORECAST_OF_OBSERVED_VIOLATIONS"]
+    if predicted_count >= 10:
+        reasons.append("HIGH_PREDICTED_WEEKLY_COUNT")
+    if trend_ratio >= 1.2:
+        reasons.append("RECENT_INCREASE")
+    if station_normalized_volume >= 0.7:
+        reasons.append("STATION_NORMALIZED_PRIORITY")
+    if neighbor_influence > 0:
+        reasons.append("GRAPH_NEIGHBOR_ACTIVITY")
+    if temporal_concentration >= 0.18:
+        reasons.append("REPEATED_PEAK_WINDOW")
+    if forecast_stability >= 70:
+        reasons.append("STABLE_WEEKLY_EVIDENCE")
+    return reasons
 
 
 def write_json(path: Path, payload: Any) -> None:
@@ -705,6 +943,14 @@ def main() -> None:
         },
         "score_name": "Obstruction Risk Score",
         "score_note": "This is a congestion-risk proxy, not measured congestion.",
+        "priority_score_name": "Enforcement Priority Score",
+        "priority_score_note": (
+            "Official-CSV-only action score using obstruction risk, station-normalized "
+            "volume, recent activity, temporal concentration, trend, graph influence, "
+            "confidence, and stability."
+        ),
+        "model_version": "official_csv_priority_v2",
+        "forecast_model_version": "official_csv_forecast_v2",
         "rows_read": total_rows,
         "rows_skipped": skipped_rows,
         "hotspot_count": len(hotspots),

@@ -30,6 +30,8 @@ def main() -> None:
     hotspots.raise_for_status()
     hotspot_payload = hotspots.json()
     assert len(hotspot_payload) == 3
+    assert "enforcement_priority_score" in hotspot_payload[0]
+    assert "priority_band" in hotspot_payload[0]
     cell_id = hotspot_payload[0]["grid_cell_id"]
 
     endpoints = [
@@ -46,6 +48,15 @@ def main() -> None:
         response = client.get(endpoint)
         response.raise_for_status()
         assert response.json()
+
+    forecast_payload = client.get("/api/forecast?limit=1").json()
+    forecast_item = forecast_payload["items"][0]
+    assert forecast_payload["holdout"]["validation_type"] == "rolling-origin weekly backtest"
+    assert "prediction_interval_low" in forecast_item
+    assert "prediction_interval_high" in forecast_item
+    assert "predicted_enforcement_priority" in forecast_item
+    assert "forecast_stability" in forecast_item
+    assert "forecast_reason_codes" in forecast_item
 
     missing = client.get("/api/hotspots/not-a-cell")
     assert missing.status_code == 404

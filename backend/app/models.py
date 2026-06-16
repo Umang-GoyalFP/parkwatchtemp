@@ -49,7 +49,15 @@ class Hotspot(BaseModel):
     dominant_violation_type: str | None = None
     neighbor_influence: float
     obstruction_risk_score: float = Field(ge=0, le=100)
+    enforcement_priority_score: float = Field(ge=0, le=100)
+    station_normalized_volume: float
+    temporal_concentration: float
+    recent_activity_score: float
+    recent_trend_ratio: float
+    stability_score: float = Field(ge=0, le=100)
+    priority_band: str
     risk_score_type: str
+    model_version: str | None = None
     confidence: str
     reason_codes: list[str]
 
@@ -110,13 +118,18 @@ class ForecastItem(BaseModel):
     longitude: float
     predicted_week: str | None = None
     predicted_violation_count: float
+    prediction_interval_low: float
+    prediction_interval_high: float
     predicted_obstruction_risk: float = Field(ge=0, le=100)
+    predicted_enforcement_priority: float = Field(ge=0, le=100)
+    forecast_stability: float = Field(ge=0, le=100)
     confidence: str
     neighbor_influence: float
     last_1_week_count: int
     last_2_week_avg: float
     last_4_week_avg: float
     historical_weeks: list[WeeklyTimeseriesPoint]
+    forecast_reason_codes: list[str]
     reason_codes: list[str]
 
 
