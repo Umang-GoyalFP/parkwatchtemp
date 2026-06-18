@@ -13,6 +13,8 @@ import type {
 } from "../lib/types";
 import { HotspotDetailPanel } from "./hotspot-detail-panel";
 import { HotspotMap } from "./hotspot-map";
+import { InteractiveMap } from "./interactive-map";
+import { HeatmapLayer } from "./heatmap-layer";
 import { ForecastPanel } from "./forecast-panel";
 import { MetricCards } from "./metric-cards";
 import { RankedHotspotTable } from "./ranked-hotspot-table";
@@ -37,7 +39,7 @@ export function DashboardShell({
   heatmap,
   forecast
 }: DashboardShellProps) {
-  const [activeTab, setActiveTab] = useState<"overview" | "map" | "forecast">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "map" | "interactive" | "heatmap" | "forecast">("overview");
   const [stationFilter, setStationFilter] = useState("All stations");
   const [confidenceFilter, setConfidenceFilter] = useState("All confidence");
   const [violationTypeFilter, setViolationTypeFilter] = useState("All violations");
@@ -215,7 +217,21 @@ export function DashboardShell({
           type="button"
           onClick={() => setActiveTab("map")}
         >
-          Spatial Map
+          Scatter Map
+        </button>
+        <button
+          className={activeTab === "interactive" ? "active" : ""}
+          type="button"
+          onClick={() => setActiveTab("interactive")}
+        >
+          Interactive Map
+        </button>
+        <button
+          className={activeTab === "heatmap" ? "active" : ""}
+          type="button"
+          onClick={() => setActiveTab("heatmap")}
+        >
+          Heatmap View
         </button>
         <button
           className={activeTab === "forecast" ? "active" : ""}
@@ -228,7 +244,7 @@ export function DashboardShell({
 
       {activeTab === "forecast" && <ForecastPanel forecast={forecast} />}
 
-      {(activeTab === "overview" || activeTab === "map") && (
+      {(activeTab === "overview" || activeTab === "map" || activeTab === "interactive" || activeTab === "heatmap") && (
         <section className="filter-panel" aria-label="Dashboard filters">
           <label>
             <span>Police station</span>
@@ -296,6 +312,32 @@ export function DashboardShell({
             Export CSV
           </button>
           <strong>{filteredHotspots.length.toLocaleString("en-IN")} matching hotspots</strong>
+        </section>
+      )}
+
+      {activeTab === "interactive" && (
+        <section className="dashboard-grid">
+          <div style={{ gridColumn: '1 / -1' }}>
+            <InteractiveMap
+              hotspots={filteredHotspots}
+              selectedCellId={selectedCellId}
+              onSelect={setSelectedCellId}
+            />
+          </div>
+          <HotspotDetailPanel hotspot={selectedHotspot} />
+        </section>
+      )}
+
+      {activeTab === "heatmap" && (
+        <section className="dashboard-grid">
+          <div style={{ gridColumn: '1 / -1' }}>
+            <HeatmapLayer
+              hotspots={filteredHotspots}
+              selectedCellId={selectedCellId}
+              title="Risk Heatmap - Color Intensity Shows Risk"
+            />
+          </div>
+          <HotspotDetailPanel hotspot={selectedHotspot} />
         </section>
       )}
 

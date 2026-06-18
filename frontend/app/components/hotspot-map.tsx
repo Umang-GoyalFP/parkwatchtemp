@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useRef, useCallback, type WheelEvent, type PointerEvent } from "react";
-import { hotspotName } from "../lib/hotspot-labels";
+import React, { useEffect, useRef, useState } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import type { Hotspot } from "../lib/types";
 
 type HotspotMapProps = {
@@ -10,58 +11,125 @@ type HotspotMapProps = {
   onSelect: (cellId: string) => void;
 };
 
+const BENGALURU_CENTER: [number, number] = [12.9716, 77.5946];
+const ZOOM_LEVEL = 12;
+const MAX_POINTS = 500; // Limit points shown
+
 export function HotspotMap({ hotspots, selectedCellId, onSelect }: HotspotMapProps) {
-  const [scale, setScale] = useState(1);
-  const [translate, setTranslate] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragStart = useRef({ x: 0, y: 0 });
-  const svgRef = useRef<SVGSVGElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
+  const markersMapRef = useRef<Map<string, L.CircleMarker>>(new Map());
 
-  const handleWheel = useCallback((e: WheelEvent<SVGSVGElement>) => {
-    e.preventDefault();
-    const zoomFactor = 0.1;
-    const direction = e.deltaY < 0 ? 1 : -1;
-    const newScale = Math.min(Math.max(0.5, scale + direction * zoomFactor * scale), 20);
-    
-    if (svgRef.current) {
-      const rect = svgRef.current.getBoundingClientRect();
-      const cursorX = e.clientX - rect.left;
-      const cursorY = e.clientY - rect.top;
-      
-      const ratio = newScale / scale;
-      const newX = cursorX - (cursorX - translate.x) * ratio;
-      const newY = cursorY - (cursorY - translate.y) * ratio;
-      
-      setScale(newScale);
-      setTranslate({ x: newX, y: newY });
-    } else {
-      setScale(newScale);
+  // Initialize map
+  useEffect(() => {
+    if (!mapRef.current) {
+      delete (L.Icon.Default.prototype as any)._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+        iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+        shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+      });
+
+      const map = L.map("scatter-map").setView(BENGALURU_CENTER, ZOOM_LEVEL);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        maxZoom: 19,
+      }).addTo(map);
+
+      mapRef.current = map;
+      markersGroupRef.current = L.layerGroup().addTo(map);
     }
-  }, [scale, translate]);
+  }, []);
 
-  const handlePointerDown = (e: PointerEvent<SVGSVGElement>) => {
-    setIsDragging(true);
-    dragStart.current = { x: e.clientX - translate.x, y: e.clientY - translate.y };
-    e.currentTarget.setPointerCapture(e.pointerId);
-  };
+  // Update points
+  useEffect(() => {
+    if (!mapRef.current || !markersGroupRef.current) return;
 
-  const handlePointerMove = (e: PointerEvent<SVGSVGElement>) => {
-    if (!isDragging) return;
-    setTranslate({
-      x: e.clientX - dragStart.current.x,
-      y: e.clientY - dragStart.current.y
+    markersGroupRef.current.clearLayers();
+    markersMapRef.current.clear();
+
+    const displayHotspots = hotspots.slice(0, MAX_POINTS);
+
+    const counts = displayHotspots.map((h) => h.violation_count);
+    const minCount = counts.length ? Math.min(...counts) : 0;
+    const maxCount = counts.length ? Math.max(...counts) : 1;
+
+    displayHotspots.forEach((hotspot) => {
+      // Normalize violation count for visual radius
+      const normalizedCount = maxCount === minCount ? 0.5 : (hotspot.violation_count - minCount) / (maxCount - minCount);
+      const radius = 4 + normalizedCount * 12;
+
+      const riskScore = hotspot.obstruction_risk_score;
+      let color = "#1e3a8a"; // Blue-dark
+      let fillColor = "#3b82f6";
+
+      if (riskScore >= 70) {
+        color = "#be123c"; // Coral/Red
+        fillColor = "#f43f5e";
+      } else if (riskScore >= 55) {
+        color = "#b45309"; // Amber
+        fillColor = "#f59e0b";
+      } else if (riskScore >= 35) {
+        color = "#0f766e"; // Teal
+        fillColor = "#14b8a6";
+      }
+
+      const marker = L.circleMarker([hotspot.latitude, hotspot.longitude], {
+        radius,
+        fillColor,
+        color,
+        weight: 1,
+        opacity: 0.8,
+        fillOpacity: 0.7,
+      }).addTo(markersGroupRef.current!);
+
+      marker.bindPopup(`
+        <div class="popup-content">
+          <strong>${hotspot.grid_cell_id}</strong>
+          <p>Risk: ${riskScore.toFixed(1)}</p>
+          <p>Violations: ${hotspot.violation_count}</p>
+        </div>
+      `);
+
+      marker.on("click", () => {
+        onSelect(hotspot.grid_cell_id);
+      });
+
+      markersMapRef.current.set(hotspot.grid_cell_id, marker);
     });
-  };
+  }, [hotspots, onSelect]);
 
-  const handlePointerUp = (e: PointerEvent<SVGSVGElement>) => {
-    setIsDragging(false);
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  };
+  // Highlight selected marker
+  useEffect(() => {
+    markersMapRef.current.forEach((marker, cellId) => {
+      if (cellId === selectedCellId) {
+        marker.setStyle({
+          weight: 3,
+          opacity: 1,
+          fillOpacity: 0.9,
+          color: "#000",
+        });
+        marker.openPopup();
+      } else {
+        const hotspot = hotspots.find(h => h.grid_cell_id === cellId);
+        if (hotspot) {
+          const riskScore = hotspot.obstruction_risk_score;
+          let color = "#1e3a8a";
+          if (riskScore >= 70) color = "#be123c";
+          else if (riskScore >= 55) color = "#b45309";
+          else if (riskScore >= 35) color = "#0f766e";
 
-  const handleReset = () => {
-    setScale(1);
-    setTranslate({ x: 0, y: 0 });
-  };
+          marker.setStyle({
+            weight: 1,
+            opacity: 0.8,
+            fillOpacity: 0.7,
+            color,
+          });
+        }
+      }
+    });
+  }, [selectedCellId, hotspots]);
 
   if (!hotspots.length) {
     return (
@@ -77,126 +145,47 @@ export function HotspotMap({ hotspots, selectedCellId, onSelect }: HotspotMapPro
     );
   }
 
-  const latitudes = hotspots.map((item) => item.latitude);
-  const longitudes = hotspots.map((item) => item.longitude);
-  const counts = hotspots.map((item) => item.violation_count);
-  const minLat = Math.min(...latitudes);
-  const maxLat = Math.max(...latitudes);
-  const minLon = Math.min(...longitudes);
-  const maxLon = Math.max(...longitudes);
-  const minCount = Math.min(...counts);
-  const maxCount = Math.max(...counts);
-
   return (
-    <section className="panel map-panel" aria-label="Hotspot map area" style={{ position: 'relative' }}>
+    <section className="panel map-panel" aria-label="Hotspot map area" style={{ display: "flex", flexDirection: "column" }}>
       <div className="section-heading">
         <div>
           <p className="eyebrow">Spatial view</p>
           <h2>Hotspot scatter view</h2>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <button 
-            onClick={handleReset} 
-            style={{ 
-              background: 'rgba(255,255,255,0.1)', 
-              border: '1px solid var(--line)', 
-              color: 'var(--ink)', 
-              borderRadius: '6px', 
-              padding: '6px 12px', 
-              cursor: 'pointer', 
-              fontSize: '0.8rem',
-              fontWeight: 700
-            }}
-          >
-            Reset Map
-          </button>
-          <span className="pill">{hotspots.length.toLocaleString("en-IN")} grid cells</span>
+          <span className="pill">
+            Showing {Math.min(hotspots.length, MAX_POINTS).toLocaleString("en-IN")} of {hotspots.length.toLocaleString("en-IN")} cells
+          </span>
         </div>
       </div>
 
-      <div className="map-canvas" style={{ touchAction: 'none' }}>
-        <div className="map-gridlines" aria-hidden="true" />
-        <svg 
-          ref={svgRef}
-          className="scatter-svg" 
-          role="img" 
-          aria-label="Hotspot grid cells by latitude and longitude"
-          onWheel={handleWheel}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-        >
-          <g transform={`translate(${translate.x}, ${translate.y}) scale(${scale})`}>
-            {hotspots.map((hotspot) => {
-              const cx = normalize(hotspot.longitude, minLon, maxLon);
-              const cy = 100 - normalize(hotspot.latitude, minLat, maxLat);
-              const selected = hotspot.grid_cell_id === selectedCellId;
-              
-              const visualRadius =
-                4 + normalize(hotspot.violation_count, minCount, maxCount) * 12;
-              const radius = visualRadius / scale;
-
-              return (
-                <g key={hotspot.grid_cell_id} 
-                   className={`scatter-point ${selected ? "selected" : ""}`}
-                   onClick={() => onSelect(hotspot.grid_cell_id)}
-                   style={{ cursor: 'pointer' }}
-                >
-                  <circle
-                    cx={`${cx}%`}
-                    cy={`${cy}%`}
-                    r={radius}
-                    fill={riskColor(hotspot.obstruction_risk_score)}
-                    opacity={selected ? 1 : 0.8}
-                    stroke={selected ? "#fff" : "rgba(255,255,255,0.5)"}
-                    strokeWidth={(selected ? 2 : 1) / scale}
-                  >
-                    <title>
-                      {`${hotspotName(hotspot)}: ${hotspot.obstruction_risk_score} score, ${hotspot.violation_count} violations`}
-                    </title>
-                  </circle>
-                  <text
-                    x={`${cx}%`}
-                    y={`${cy}%`}
-                    dy={(radius + 12 / scale)}
-                    textAnchor="middle"
-                    fill="var(--ink)"
-                    fontSize={`${11 / scale}px`}
-                    fontWeight="800"
-                    pointerEvents="none"
-                    style={{ textShadow: '0 2px 4px rgba(0,0,0,0.9)' }}
-                  >
-                    {hotspot.violation_count}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
-        </svg>
+      <div style={{ flex: 1, position: 'relative', minHeight: '500px', width: '100%', borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--line)' }}>
+        <div id="scatter-map" style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, width: '100%', height: '100%' }} />
       </div>
 
-      <div className="map-legend">
+      <div className="map-legend" style={{ marginTop: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
         <span>Lower score</span>
-        <span className="legend-line" />
+        <span className="legend-line" style={{ background: 'linear-gradient(to right, #3b82f6, #14b8a6, #f59e0b, #f43f5e)', height: '8px', width: '100px', borderRadius: '4px' }} />
         <span>Higher score</span>
-        <span className="size-note" style={{ marginLeft: 'auto' }}>Size = violation count. Drag to pan, scroll to zoom.</span>
+        <span className="size-note" style={{ marginLeft: 'auto', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+          Size = violation count. Map limited to top {MAX_POINTS} for performance.
+        </span>
       </div>
+
+      <style jsx>{`
+        :global(.popup-content) {
+          font-size: 13px;
+        }
+        :global(.popup-content strong) {
+          display: block;
+          margin-bottom: 4px;
+          color: #1e293b;
+        }
+        :global(.popup-content p) {
+          margin: 2px 0;
+          color: #475569;
+        }
+      `}</style>
     </section>
   );
-}
-
-function normalize(value: number, minimum: number, maximum: number) {
-  if (maximum === minimum) {
-    return 50;
-  }
-  return ((value - minimum) / (maximum - minimum)) * 100;
-}
-
-function riskColor(score: number) {
-  if (score >= 70) return "var(--coral)";
-  if (score >= 55) return "var(--amber)";
-  if (score >= 35) return "var(--teal)";
-  return "var(--blue-dark)";
 }
